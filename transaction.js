@@ -13,7 +13,6 @@
   * data:[] | Object,  //事务会涉及到更改的数据变量集合或者单独的复杂Object 
   * result:null,  当前事务执行结果
   * prevDatas:[],  复合类型数组，用来追踪数据来源，类似撤销记录下的历史数据
-  * prevPoints:[], 记录数据来源的引用
   * events:[],   整个事务过程设计到的functions流程，compose顺序执行，每步捕捉异常返回或错误，如果错误，直接结束流程并进行错误回调
   * errorBack:Function, 捕捉事务失败的回调
   * notify：function , 事务结果通知
@@ -23,17 +22,19 @@
   * lock:Function, 增加事务锁
   * unlock:Function，释放事务锁
   * checkFunc:Function, 自定义判断事务执行过程已经失败的检测函数
+  * $rollCb //用来作为写入rollBack的回调,因为eval/new Function这种方式针对的上下文必须是受体文件的上下文，在源码中更改无效
   */
 
   class Transaction{
      
-     constructor(funcs,data,checkFunc){
+     constructor(funcs,data,$rollCb,checkFunc){
         if(!Array.isArray(funcs)){
             console.error('Transaction must be start with function Array')
             return
         }
         if(typeof data==='function'&&!checkFunc){
-           checkFunc=data
+           checkFunc=$rollCb
+           $rollCb=data
            data=Object.create(null) 
         }
         //data因为要追溯历史，必须拷贝原始数据
@@ -41,19 +42,17 @@
            console.error(`Transaction's data should be either Object(has keys) or Object Array`)
            return
         }
-        this.checkFunc=typeof checkFunc==='function'?()=>{
+        this.checkFunc=typeof checkFunc==='function'?function(){
           let result=checkFunc();
           /**检测到不符合业务要求，即判定为事务执行失败，回滚操作 */
-          if(typeof result==='boolean'&&!result){
-             this.rollBack('逻辑不符，要求rollback')
-          }
+          if(typeof result==='boolean'&&!result) this.rollBack()
          }:undefined
         this.data=(typeof data==='object')?cloneData(data):[] 
         this.state='pending'
         this.events=funcs
         this.result=null
         this.prevDatas=[]
-        this.prevPoints=[]
+        this.$rollCb=$rollCb
         
          
      }
@@ -63,7 +62,6 @@
        if(this.state!=='pending') return
        this.lock()
        //先拷贝原有数据，后续可考虑使用diff算法进行优化存储
-       this.prevPoints.push(this.data)
        let _data=cloneData(this.data)
        this.prevDatas.push(_data)
        this.compose(arg)
@@ -89,35 +87,26 @@
 
      /**回滚操作 */
      rollBack(err){
-        console.log(err)
         if(this.state==='rollback') return
-        this.state='rollback'
+        this.state==='rollback'
+
         console.error('Transaction is fail to End,Because '+(err?err.toString():'手动回滚')+',now rollBack')
+
         if(!this.prevDatas.length){
            console.error('Transaction rollBack error because nothing to rollBack')
+           return
         } 
-        let _obj=this.prevDatas.pop(),obj1=this.prevPoints.pop()
+        let _obj=this.prevDatas.pop(),str=''
         let func=obj=>{
-           let str=''
-           console.log(obj)
-           console.log('****************')
-           if(obj&&typeof obj==='object'){
-            Object.keys(obj).forEach(key=>{
-               try{
-                let sf=JSON.stringify(obj[key])
-                // str+=`${key}=JSON.stringify(${obj[key]});`
-                // Object.keys(obj[key]).forEach(it=>{
-                //    obj[key][it]=_obj[key][it]
-                // })
-                str+=`var ${key}=${sf};`
- 
-               }catch(e){
-                  console.error(e.toString())
-               }
-            })
-            console.log(str)
-            eval(str) //利用eval将字符串变成js执行或采用new Function('return '+str)()函数执行
-           } 
+           Object.keys(obj).forEach(key=>{
+              try{
+               let ss=JSON.stringify(obj[key])  
+               str+=`${key}=${ss};`
+              }catch(e){
+                 console.error(e.toString())
+              }
+           })
+
         }
         //回滚对应数据的污染，思路是遍历最近的prevData，立即执行函数将其key与value回滚到最初状态
          (function(){
@@ -128,10 +117,17 @@
              } 
 
          })()
-        
 
+         //  let ff=new Function('return '+str)
+         //  ff.call(this.$rollCb)
+
+        //eval(str).call(this.$rollCb) //利用eval将字符串变成js执行或采用new Function('return '+str)()函数执行
+
+        this.$rollCb(str)
+        
         //执行完后释放
-        this.unlock()      
+        this.unlock()  
+        return str    
      }
 
        /**
@@ -152,10 +148,10 @@
       let _init=this.events.shift(),i=1
       this.result=this.events.reduce((a,b)=>{
         if(a) a.then(res=>{
-           if(this.checkFunc&&!(this.checkFunc.call(_this,res))){
-              this.rollBack('不符合回调逻辑')
+           if(this.checkFunc&&!this.checkFunc.call(_this,res)){
+              this.rollBack('逻辑检测回调条件触发')
               return
-           }   
+           }
            if(this.state!=='locking') return //表明此时已经释放锁，事务以回滚结束 
            if(++i===len) this.commit()   //表示已经遍历完了
            return b.apply(_this,res)

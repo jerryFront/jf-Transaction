@@ -17,7 +17,7 @@ var store={
 
 var fun1=()=>{
     store.b.rr='6868'
-    return store
+    return null
 }
 
 var fun2=()=>{
@@ -25,35 +25,14 @@ var fun2=()=>{
     return null
 }
 
-var jsTransaction=new Transaction([fun1,fun2],{store})
-
-
-// jsTransaction._data=store
-
-// Object.defineProperty(jsTransaction._data,'store',{
-//     set(val){
-//         console.log(666)
-//         console.log(val)
-//     },
-//     get(){
-        
-//     }
-// })
-
-// store.c='dptt'
-
-// for(var i in jsTransaction._data)
-//  [i][i]=33
-
-// jsTransaction._data.c=9999
-// jsTransaction._data.b.rr='123'
+var jsTransaction=new Transaction([fun1,fun2],{store},str=>eval(str),res=>res)
 
 jsTransaction.start()
-jsTransaction.rollBack()
+
 
 setTimeout(()=>{
+    // jsTransaction.rollBack()  //分手动或自动触发事务回滚，自动即检测到不满足逻辑条件
     console.log(store)
-    console.log(jsTransaction._data)
 },3000)
 
 
